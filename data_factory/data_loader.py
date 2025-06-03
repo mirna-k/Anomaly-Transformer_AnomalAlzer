@@ -11,7 +11,51 @@ import math
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import pickle
+import dask.dataframe as dd
 
+def scale_values(dask_dataframe: dd, column_name:str):
+    # Scaling
+    global_min = dask_dataframe[dask_dataframe.anomaly == 0][column_name].min().compute()
+    global_max = dask_dataframe[dask_dataframe.anomaly == 0][column_name].max().compute()
+
+    dask_dataframe[f"{column_name}_scaled"] = (dask_dataframe[column_name] - global_min) / (global_max - global_min)
+
+    return dask_dataframe
+
+
+def get_scaled_data_values(csv_path: str, column_name: str):
+    ddf = dd.read_csv(csv_path)
+
+    ddf = scale_values(ddf, column_name)
+    df = ddf.compute()
+
+    return df
+
+        
+def extract_signal_and_anomaly_array(df, column_name:str):
+    data = df[f"{column_name}_scaled"].values
+    labels = df["anomaly"].values
+    return data, labels
+
+
+def crop_datetime(df, start_datetime="", end_datetime="", print_data_info=False):
+
+    if print_data_info:
+        print(df.head())
+        print(df.info())
+        print(df.describe())
+
+    start_dt = pd.to_datetime(start_datetime, utc=True)
+    end_dt  = pd.to_datetime(end_datetime, utc=True)
+
+    if "datetime" in df.columns:
+        df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+        data_filtered = df[(df["datetime"] >= start_dt) & (df["datetime"] <= end_dt)]
+    else:
+        df.index = pd.to_datetime(df.index, utc=True)
+        data_filtered = df[(df.index >= start_dt) & (df.index <= end_dt)]
+    
+    return data_filtered
 
 class PSMSegLoader(object):
     def __init__(self, data_path, win_size, step, mode="train"):
@@ -199,6 +243,63 @@ class SMDSegLoader(object):
                 self.test_labels[index // self.step * self.win_size:index // self.step * self.win_size + self.win_size])
 
 
+class ESASegLoader(object):
+    def __init__(self, data_path, win_size, step, mode="train"):
+        self.mode = mode
+        self.step = step
+        self.win_size = win_size
+
+        filename = os.path.basename(data_path)  # 'channel_37.csv'
+        channel = os.path.splitext(filename)[0]
+
+        df = get_scaled_data_values(data_path, channel)
+
+        # Train
+        start_datetime="2001-01-01T00:00:00.000Z"
+        end_datetime = "2001-10-01T00:00:00.000Z"
+        filtered_df = crop_datetime(df, start_datetime, end_datetime)
+
+        self.train = filtered_df[channel]
+
+        # valiation
+        data_len = len(self.train)
+        self.val = self.train[(int)(data_len * 0.8):]
+         
+        # test
+        start_datetime="2004-01-01T00:00:00.000Z"
+        end_datetime = "2005-01-01T00:00:00.000Z"
+        filtered_df = crop_datetime(df, start_datetime, end_datetime)
+
+        self.test, self.test_labels = extract_signal_and_anomaly_array(filtered_df, channel)
+
+
+    def __len__(self):
+
+        if self.mode == "train":
+            return (self.train.shape[0] - self.win_size) // self.step + 1
+        elif (self.mode == 'val'):
+            return (self.val.shape[0] - self.win_size) // self.step + 1
+        elif (self.mode == 'test'):
+            return (self.test.shape[0] - self.win_size) // self.step + 1
+        else:
+            return (self.test.shape[0] - self.win_size) // self.win_size + 1
+
+
+    def __getitem__(self, index):
+        index = index * self.step
+        if self.mode == "train":
+            return np.float32(self.train[index:index + self.win_size]), np.float32(self.test_labels[0:self.win_size])
+        elif (self.mode == 'val'):
+            return np.float32(self.val[index:index + self.win_size]), np.float32(self.test_labels[0:self.win_size])
+        elif (self.mode == 'test'):
+            return np.float32(self.test[index:index + self.win_size]), np.float32(
+                self.test_labels[index:index + self.win_size])
+        else:
+            return np.float32(self.test[
+                              index // self.step * self.win_size:index // self.step * self.win_size + self.win_size]), np.float32(
+                self.test_labels[index // self.step * self.win_size:index // self.step * self.win_size + self.win_size])
+
+
 def get_loader_segment(data_path, batch_size, win_size=100, step=100, mode='train', dataset='KDD'):
     if (dataset == 'SMD'):
         dataset = SMDSegLoader(data_path, win_size, step, mode)
@@ -208,6 +309,8 @@ def get_loader_segment(data_path, batch_size, win_size=100, step=100, mode='trai
         dataset = SMAPSegLoader(data_path, win_size, 1, mode)
     elif (dataset == 'PSM'):
         dataset = PSMSegLoader(data_path, win_size, 1, mode)
+    elif (dataset == 'ESA'):
+        dataset = ESASegLoader(data_path, win_size, step, mode)
 
     shuffle = False
     if mode == 'train':
