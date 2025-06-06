@@ -1,12 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import plotly.graph_objects as go
 import numpy as np
 import os
 import time
 from utils.utils import *
 from model.AnomalyTransformer import AnomalyTransformer
 from data_factory.data_loader import get_loader_segment
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 
 
 def my_kl_loss(p, q):
@@ -85,42 +87,7 @@ class Solver(object):
         self.build_model()
         self.device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
         self.criterion = nn.MSELoss()
-
-    def plot_results(self, data, pred_labels, true_labels):
-        import plotly.graph_objects as go
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            y=data,
-            mode='lines',
-            name='Signal'
-        ))
-
-            # Detected anomalies (red)
-        fig.add_trace(go.Scatter(
-            y=np.where(pred_labels == 1, data.max(), np.nan),
-            mode='markers',
-            name='Detected Anomaly',
-            marker=dict(color='red', size=5),
-        ))
-
-        # Ground truth anomalies (green)
-        fig.add_trace(go.Scatter(
-            y=np.where(true_labels == 1, data.max(), np.nan),
-            mode='markers',
-            name='True Anomaly',
-            marker=dict(color='green', size=3),
-        ))
-
-        # Layout
-        fig.update_layout(
-            title='Anomaly Detection Result',
-            xaxis_title='Time Step',
-            yaxis_title='Signal Value',
-            legend=dict(x=0, y=1.1, orientation="h")
-        )
-        fig.show() 
-        fig.write_html("anomaly_detection_result.html")
+        self.og_lr = self.lr
 
 
     def build_model(self):
@@ -159,6 +126,18 @@ class Solver(object):
 
         return np.average(loss_1), np.average(loss_2)
 
+
+    def phase_train(self, num_phases=3):
+        for phase in range(1, num_phases + 1):
+            print(f"\n====== PHASE {phase} TRAINING ======\n")
+            self.train_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
+                                                mode='train', dataset='ESAPhase', phase=phase)
+            self.vali_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
+                                                mode='val', dataset='ESAPhase', phase=phase)
+            self.lr = self.og_lr
+            self.train()
+
+    
     def train(self):
 
         print("======================TRAIN MODE======================")
@@ -405,8 +384,6 @@ class Solver(object):
 
         self.plot_results(torch.cat([x.view(-1) for x in test_data]), pred, gt)
 
-        from sklearn.metrics import precision_recall_fscore_support
-        from sklearn.metrics import accuracy_score
         accuracy = accuracy_score(gt, pred)
         precision, recall, f_score, support = precision_recall_fscore_support(gt, pred,
                                                                               average='binary')
@@ -416,3 +393,38 @@ class Solver(object):
                 recall, f_score))
 
         return accuracy, precision, recall, f_score
+    
+
+    def plot_results(self, data, pred_labels, true_labels):
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            y=data,
+            mode='lines',
+            name='Signal'
+        ))
+
+        # Detected anomalies (red)
+        fig.add_trace(go.Scatter(
+            y=np.where(pred_labels == 1, data.max(), np.nan),
+            mode='markers',
+            name='Detected Anomaly',
+            marker=dict(color='red', size=5),
+        ))
+
+        # Ground truth anomalies (green)
+        fig.add_trace(go.Scatter(
+            y=np.where(true_labels == 1, data.max(), np.nan),
+            mode='markers',
+            name='True Anomaly',
+            marker=dict(color='green', size=3),
+        ))
+
+        # Layout
+        fig.update_layout(
+            title='Anomaly Detection Result',
+            xaxis_title='Time Step',
+            yaxis_title='Signal Value',
+            legend=dict(x=0, y=1.1, orientation="h")
+        )
+        fig.show() 
+        fig.write_html("anomaly_detection_result.html")

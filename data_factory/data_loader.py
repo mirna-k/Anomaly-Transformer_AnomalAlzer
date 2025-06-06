@@ -272,9 +272,7 @@ class ESASegLoader(object):
 
         self.test, self.test_labels = extract_signal_and_anomaly_array(filtered_df, channel)
 
-
     def __len__(self):
-
         if self.mode == "train":
             return (self.train.shape[0] - self.win_size) // self.step + 1
         elif (self.mode == 'val'):
@@ -283,7 +281,6 @@ class ESASegLoader(object):
             return (self.test.shape[0] - self.win_size) // self.step + 1
         else:
             return (self.test.shape[0] - self.win_size) // self.win_size + 1
-
 
     def __getitem__(self, index):
         index = index * self.step
@@ -300,7 +297,63 @@ class ESASegLoader(object):
                 self.test_labels[index // self.step * self.win_size:index // self.step * self.win_size + self.win_size])
 
 
-def get_loader_segment(data_path, batch_size, win_size=100, step=100, mode='train', dataset='KDD'):
+class ESAPhaseSegLoader(object):
+    def __init__(self, data_path, win_size, step, mode:str="train", phase=1):
+        self.mode = mode
+        self.step = step
+        self.win_size = win_size
+        self.phase = phase
+
+        filename = os.path.basename(data_path)
+        channel = os.path.splitext(filename)[0]
+        df = get_scaled_data_values(data_path, channel)
+
+        start_datetime = pd.Timestamp("2001-01-01T00:00:00.000Z")
+        end_datetime = pd.Timestamp("2001-10-01T00:00:00.000Z")
+        months_to_add = 9
+
+        # PHASED TRAINING PERIODS
+        if self.mode == "train":
+            start_datetime = start_datetime + pd.DateOffset(months=months_to_add*(phase-1))
+            end_datetime = end_datetime + pd.DateOffset(months=months_to_add*(phase-1))
+            print(start_datetime)
+            print(end_datetime)
+
+            filtered_df = crop_datetime(df, start_datetime.isoformat(), end_datetime.isoformat())
+            self.train = filtered_df[channel]
+            self.val = self.train[(int)(len(self.train) * 0.8):]
+
+        start_datetime = "2005-01-01T00:00:00.000Z"
+        end_datetime = "2006-01-01T00:00:00.000Z"
+        filtered_df = crop_datetime(df, start_datetime, end_datetime)
+        self.test, self.test_labels = extract_signal_and_anomaly_array(filtered_df, channel)
+
+    def __len__(self):
+        if self.mode == "phase-train":
+            return (self.train.shape[0] - self.win_size) // self.step + 1
+        elif (self.mode == 'val'):
+            return (self.val.shape[0] - self.win_size) // self.step + 1
+        elif (self.mode == 'test'):
+            return (self.test.shape[0] - self.win_size) // self.step + 1
+        else:
+            return (self.test.shape[0] - self.win_size) // self.win_size + 1
+
+    def __getitem__(self, index):
+        index = index * self.step
+        if self.mode == "phase-train":
+            return np.float32(self.train[index:index + self.win_size]), np.float32(self.test_labels[0:self.win_size])
+        elif (self.mode == 'val'):
+            return np.float32(self.val[index:index + self.win_size]), np.float32(self.test_labels[0:self.win_size])
+        elif (self.mode == 'test'):
+            return np.float32(self.test[index:index + self.win_size]), np.float32(
+                self.test_labels[index:index + self.win_size])
+        else:
+            return np.float32(self.test[
+                            index // self.step * self.win_size:index // self.step * self.win_size + self.win_size]), np.float32(
+                self.test_labels[index // self.step * self.win_size:index // self.step * self.win_size + self.win_size])
+
+
+def get_loader_segment(data_path, batch_size, win_size=100, step=100, mode='train', dataset='KDD', phase=1):
     if (dataset == 'SMD'):
         dataset = SMDSegLoader(data_path, win_size, step, mode)
     elif (dataset == 'MSL'):
@@ -311,6 +364,8 @@ def get_loader_segment(data_path, batch_size, win_size=100, step=100, mode='trai
         dataset = PSMSegLoader(data_path, win_size, 1, mode)
     elif (dataset == 'ESA'):
         dataset = ESASegLoader(data_path, win_size, step, mode)
+    elif (dataset == 'ESAPhase'):
+        dataset = ESAPhaseSegLoader(data_path, win_size, step, mode, phase)
 
     shuffle = False
     if mode == 'train':
