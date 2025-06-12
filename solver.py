@@ -134,7 +134,7 @@ class Solver(object):
                                                 mode='train', dataset='ESAPhase', phase=phase)
             self.vali_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
                                                 mode='val', dataset='ESAPhase', phase=phase)
-            self.lr = self.og_lr
+            self.lr = self.og_lr * 0.9
             self.train()
 
     
@@ -218,22 +218,22 @@ class Solver(object):
     def test(self):
         self.model.load_state_dict(
             torch.load(
-                os.path.join(str(self.model_save_path), str(self.dataset) + '_checkpoint.pth')))
+                self.pretrained_model))
         self.model.eval()
         temperature = 50
 
         print("======================TEST MODE======================")
 
-        criterion = nn.MSELoss(reduce=False)
+        criterion = nn.MSELoss(reduction='none')
 
         # (1) stastic on the train set
         attens_energy = []
         for i, (input_data, labels) in enumerate(self.train_loader):
             input = input_data.float().to(self.device)
             output, series, prior, _ = self.model(input)
-            output = output.squeeze(-1)
-            #loss = torch.mean(criterion(input, output), dim=-1)
-            loss = criterion(input, output)  # shape: [256, 100]
+            #output = output.squeeze(-1)
+            loss = torch.mean(criterion(input, output), dim=-1)
+            #loss = criterion(input, output)  # shape: [256, 100]
 
             series_loss = 0.0
             prior_loss = 0.0
@@ -269,9 +269,9 @@ class Solver(object):
             input = input_data.float().to(self.device)
             output, series, prior, _ = self.model(input)
 
-            #loss = torch.mean(criterion(input, output), dim=-1)
-            output = output.squeeze(-1)
-            loss = criterion(input, output)  # shape: [256, 100]
+            loss = torch.mean(criterion(input, output), dim=-1)
+            #output = output.squeeze(-1)
+            #loss = criterion(input, output)  # shape: [256, 100]
 
             series_loss = 0.0
             prior_loss = 0.0
@@ -312,9 +312,9 @@ class Solver(object):
             input = input_data.float().to(self.device)
             output, series, prior, _ = self.model(input)
 
-            #loss = torch.mean(criterion(input, output), dim=-1)
-            output = output.squeeze(-1)
-            loss = criterion(input, output)  # shape: [256, 100]
+            loss = torch.mean(criterion(input, output), dim=-1)
+            #output = output.squeeze(-1)
+            #loss = criterion(input, output)  # shape: [256, 100]
 
             series_loss = 0.0
             prior_loss = 0.0
@@ -382,11 +382,21 @@ class Solver(object):
         print("pred: ", pred.shape)
         print("gt:   ", gt.shape)
 
-        self.plot_results(torch.cat([x.view(-1) for x in test_data]), pred, gt)
+        num_channels = 5
+        flat_data = torch.cat([x.view(-1) for x in test_data])  # shape: [total_length]
+        total_length = flat_data.shape[0]
+        time_steps = total_length // num_channels
+
+        reshaped = flat_data.view(time_steps, num_channels)
+
+        for ch in range(num_channels):
+            self.plot_results(reshaped[:, ch], pred, gt)
+
+        #self.plot_results(torch.cat([x.view(-1) for x in test_data]), pred, gt)
 
         accuracy = accuracy_score(gt, pred)
         precision, recall, f_score, support = precision_recall_fscore_support(gt, pred,
-                                                                              average='binary')
+                                                                              average='binary', zero_division=0)
         print(
             "Accuracy : {:0.4f}, Precision : {:0.4f}, Recall : {:0.4f}, F-score : {:0.4f} ".format(
                 accuracy, precision,
