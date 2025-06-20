@@ -23,13 +23,58 @@ def scale_values(dask_dataframe: dd, column_name:str):
     return dask_dataframe
 
 
+def apply_moving_average(df: pd.DataFrame, column_names: list, window_size: int = 5, smooth_anomalies=False):
+    df = df.copy()
+
+    if smooth_anomalies:
+        for column_name in column_names:
+            df[column_name] = df[column_name].rolling(
+                window=window_size, center=True, min_periods=1).mean()
+    else:
+        for column_name in column_names:
+            # Only smooth non-anomalous data
+            smooth_values = df.loc[df.anomaly == 0, column_name].rolling(
+                window=window_size, center=True, min_periods=1).mean()
+            
+            # Assign smoothed values only to normal data points
+            df.loc[df.anomaly == 0, column_name] = smooth_values
+    
+    return df
+
+
+import plotly.graph_objects as go
+def plot_smoothed_signal(df, column_names):
+    fig = go.Figure()
+    
+    for column in column_names:
+        # Original signal (optional)
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df[column],
+            mode='lines',
+            name=f"Smoothed: {column}"
+        ))
+
+    fig.update_layout(
+        title="Smoothed Signal Plot",
+        xaxis_title="Time",
+        yaxis_title="Value",
+        template="plotly_white",
+        legend=dict(x=0, y=1)
+    )
+    
+    fig.show()
+
+
 def get_scaled_data_values(csv_path: str):
     ddf = dd.read_csv(csv_path)
 
     columns = [col for col in ddf.columns if col.startswith('channel')]
     for column_name in columns:
-        ddf = scale_values(ddf, column_name)
-        df = ddf.compute()
+        # ddf = scale_values(ddf, column_name)
+        ddf = ddf.map_partitions(apply_moving_average, column_name, window_size=100)
+
+    df = ddf.compute()
 
     return df, columns
 
@@ -37,7 +82,7 @@ def get_scaled_data_values(csv_path: str):
 def extract_signal_and_anomaly_array(df, columns: list):
     signals = []
     for col in columns:
-        signal = df[f"{col}_scaled"].values
+        signal = df[col].values
         signals.append(signal)
 
     # Convert list of arrays to 2D array: shape (num_samples, num_channels)
@@ -49,7 +94,6 @@ def extract_signal_and_anomaly_array(df, columns: list):
     labels = df["anomaly"].values
 
     return signal_df, labels
-
 
 
 def crop_datetime(df, start_datetime="", end_datetime="", print_data_info=False):
@@ -318,7 +362,11 @@ class ESAPhaseSegLoader(object):
         self.win_size = win_size
         self.phase = phase
 
-        df, channel_columns = get_scaled_data_values(data_path)
+        #df, channel_columns = get_scaled_data_values(data_path)
+
+        df = pd.read_csv(data_path)
+
+        channel_columns = [col for col in df.columns if col.startswith('channel')]
 
         start_datetime = pd.Timestamp("2000-01-01T00:00:00.000Z")
         end_datetime = pd.Timestamp("2000-05-01T00:00:00.000Z")
@@ -332,17 +380,15 @@ class ESAPhaseSegLoader(object):
             print(end_datetime)
 
             filtered_df = crop_datetime(df, start_datetime.isoformat(), end_datetime.isoformat())
-            scaled_cols = [f"{col}_scaled" for col in channel_columns]
-            self.train = filtered_df[scaled_cols]
-            if (self.train[scaled_cols] > 1).any().any():
-                print('contains values larger than 1')
-                print(self.train.head())
-            self.val = self.train[(int)(len(self.train) * 0.8):]
+            smoothed_df = apply_moving_average(filtered_df, channel_columns, self.win_size, smooth_anomalies=True)
+            #plot_smoothed_signal(smoothed_df, channel_columns)
+            self.train = smoothed_df[channel_columns]
 
-        start_datetime = "2000-01-01T00:00:00.000Z"
-        end_datetime = "2001-01-01T00:00:00.000Z"
+        start_datetime = "2001-01-01T00:00:00.000Z"
+        end_datetime = "2002-01-01T00:00:00.000Z"
         filtered_df = crop_datetime(df, start_datetime, end_datetime)
-        self.test, self.test_labels = extract_signal_and_anomaly_array(filtered_df, channel_columns)
+        smoothed_df = apply_moving_average(filtered_df, channel_columns, self.win_size, smooth_anomalies=True)
+        self.test, self.test_labels = extract_signal_and_anomaly_array(smoothed_df, channel_columns)
 
     def __len__(self):
         if self.mode == "train":

@@ -85,7 +85,7 @@ class Solver(object):
                                               dataset=self.dataset)
 
         self.build_model()
-        self.device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         self.criterion = nn.MSELoss()
         self.og_lr = self.lr
 
@@ -95,7 +95,7 @@ class Solver(object):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
         if torch.cuda.is_available():
-            self.model.to(torch.device('cuda:2'))
+            self.model.to(torch.device('cuda:1'))
 
     def vali(self, vali_loader):
         self.model.eval()
@@ -135,6 +135,8 @@ class Solver(object):
             self.vali_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
                                                 mode='val', dataset='ESAPhase', phase=phase)
             self.lr = self.og_lr * 0.9
+            with open("traning_checker.txt", "a") as file:
+                file.write(f"PHASE: {phase}\n")
             self.train()
 
     
@@ -146,7 +148,7 @@ class Solver(object):
         path = self.model_save_path
         if not os.path.exists(path):
             os.makedirs(path)
-        early_stopping = EarlyStopping(patience=10, verbose=True, dataset_name=self.dataset)
+        early_stopping = EarlyStopping(patience=3, verbose=True, dataset_name=self.dataset)
         train_steps = len(self.train_loader)
 
         for epoch in range(self.num_epochs):
@@ -214,11 +216,14 @@ class Solver(object):
                 print("Early stopping")
                 break
             adjust_learning_rate(self.optimizer, epoch + 1, self.lr)
+            with open("traning_checker.txt", "a") as file:
+                file.write(f"Epoch: {epoch}\n")
+
 
     def test(self):
         self.model.load_state_dict(
             torch.load(
-                self.pretrained_model))
+                self.pretrained_model, map_location={'cuda:2': 'cuda:1'}))
         self.model.eval()
         temperature = 50
 
@@ -389,8 +394,10 @@ class Solver(object):
 
         reshaped = flat_data.view(time_steps, num_channels)
 
-        for ch in range(num_channels):
-            self.plot_results(reshaped[:, ch], pred, gt)
+        self.plot_all_results(reshaped, pred, gt)
+
+        # for ch in range(num_channels):
+        #     self.plot_results(reshaped[:, ch], pred, gt)
 
         #self.plot_results(torch.cat([x.view(-1) for x in test_data]), pred, gt)
 
@@ -405,36 +412,43 @@ class Solver(object):
         return accuracy, precision, recall, f_score
     
 
-    def plot_results(self, data, pred_labels, true_labels):
+    def plot_all_results(self, reshaped, pred, gt):
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            y=data,
-            mode='lines',
-            name='Signal'
-        ))
+        num_channels = reshaped.shape[1]
+
+        for ch in range(num_channels):
+            data = reshaped[:, ch]
+
+            # Signal
+            fig.add_trace(go.Scatter(
+                y=data,
+                mode='lines',
+                name=f'Signal ch{ch}'
+            ))
 
         # Detected anomalies (red)
         fig.add_trace(go.Scatter(
-            y=np.where(pred_labels == 1, data.max(), np.nan),
+            y=np.where(pred == 1, data.max(), np.nan),
             mode='markers',
-            name='Detected Anomaly',
+            name=f'Detected Anomaly ch{ch}',
             marker=dict(color='red', size=5),
         ))
 
         # Ground truth anomalies (green)
         fig.add_trace(go.Scatter(
-            y=np.where(true_labels == 1, data.max(), np.nan),
+            y=np.where(gt == 1, data.max(), np.nan),
             mode='markers',
-            name='True Anomaly',
+            name=f'True Anomaly ch{ch}',
             marker=dict(color='green', size=3),
         ))
 
         # Layout
         fig.update_layout(
-            title='Anomaly Detection Result',
+            title='Anomaly Detection Results Across Channels',
             xaxis_title='Time Step',
             yaxis_title='Signal Value',
-            legend=dict(x=0, y=1.1, orientation="h")
+            legend=dict(x=0, y=1.1, orientation="h"),
         )
-        fig.show() 
-        fig.write_html("anomaly_detection_result.html")
+        fig.show()
+        fig.write_html("anomaly_detection_result_all_channels.html")
+

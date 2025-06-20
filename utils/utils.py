@@ -8,7 +8,7 @@ import numpy as np
 
 def to_var(x, volatile=False):
     if torch.cuda.is_available():
-        x = x.to(torch.device('cuda:2'))
+        x = x.to(torch.device('cuda:1'))
     return Variable(x, volatile=volatile)
 
 
