@@ -11,17 +11,6 @@ import math
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import pickle
-import dask.dataframe as dd
-
-def scale_values(dask_dataframe: dd, column_name:str):
-    # Scaling
-    global_min = dask_dataframe[column_name].min().compute()
-    global_max = dask_dataframe[column_name].max().compute()
-
-    dask_dataframe[f"{column_name}_scaled"] = (dask_dataframe[column_name] - global_min) / (global_max - global_min)
-
-    return dask_dataframe
-
 
 def apply_moving_average(df: pd.DataFrame, column_names: list, window_size: int = 5, smooth_anomalies=False):
     df = df.copy()
@@ -67,7 +56,7 @@ def plot_smoothed_signal(df, column_names):
 
 
 def get_scaled_data_values(csv_path: str):
-    ddf = dd.read_csv(csv_path)
+    # ddf = dd.read_csv(csv_path)
 
     columns = [col for col in ddf.columns if col.startswith('channel')]
     for column_name in columns:
@@ -310,7 +299,9 @@ class ESASegLoader(object):
         filename = os.path.basename(data_path)
         channel = os.path.splitext(filename)[0]
 
-        df = get_scaled_data_values(data_path, channel)
+        #df, channel_columns = get_scaled_data_values(data_path)
+
+        df = pd.read_csv(data_path)
 
         # Train
         start_datetime="2001-01-01T00:00:00.000Z"
@@ -380,9 +371,9 @@ class ESAPhaseSegLoader(object):
             print(end_datetime)
 
             filtered_df = crop_datetime(df, start_datetime.isoformat(), end_datetime.isoformat())
-            smoothed_df = apply_moving_average(filtered_df, channel_columns, self.win_size, smooth_anomalies=True)
+            #smoothed_df = apply_moving_average(filtered_df, channel_columns, self.win_size, smooth_anomalies=True)
             #plot_smoothed_signal(smoothed_df, channel_columns)
-            self.train = smoothed_df[channel_columns]
+            self.train = filtered_df[channel_columns]
 
         start_datetime = "2001-01-01T00:00:00.000Z"
         end_datetime = "2002-01-01T00:00:00.000Z"

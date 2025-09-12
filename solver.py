@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,7 +9,7 @@ import time
 from utils.utils import *
 from model.AnomalyTransformer import AnomalyTransformer
 from data_factory.data_loader import get_loader_segment
-from sklearn.metrics import precision_recall_fscore_support, accuracy_score
+from sklearn.metrics import auc, mean_absolute_error, mean_squared_error, precision_recall_curve, precision_recall_fscore_support, accuracy_score, roc_curve
 
 
 def my_kl_loss(p, q):
@@ -85,7 +86,7 @@ class Solver(object):
                                               dataset=self.dataset)
 
         self.build_model()
-        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.criterion = nn.MSELoss()
         self.og_lr = self.lr
 
@@ -95,7 +96,7 @@ class Solver(object):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
         if torch.cuda.is_available():
-            self.model.to(torch.device('cuda:1'))
+            self.model.to(torch.device('cuda'))
 
     def vali(self, vali_loader):
         self.model.eval()
@@ -135,8 +136,6 @@ class Solver(object):
             self.vali_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
                                                 mode='val', dataset='ESAPhase', phase=phase)
             self.lr = self.og_lr * 0.9
-            with open("traning_checker.txt", "a") as file:
-                file.write(f"PHASE: {phase}\n")
             self.train()
 
     
@@ -216,14 +215,12 @@ class Solver(object):
                 print("Early stopping")
                 break
             adjust_learning_rate(self.optimizer, epoch + 1, self.lr)
-            with open("traning_checker.txt", "a") as file:
-                file.write(f"Epoch: {epoch}\n")
 
 
     def test(self):
         self.model.load_state_dict(
             torch.load(
-                self.pretrained_model, map_location={'cuda:2': 'cuda:1'}))
+                self.pretrained_model, map_location={'cuda': 'cuda:1'}))
         self.model.eval()
         temperature = 50
 
@@ -400,6 +397,46 @@ class Solver(object):
         #     self.plot_results(reshaped[:, ch], pred, gt)
 
         #self.plot_results(torch.cat([x.view(-1) for x in test_data]), pred, gt)
+
+        mse = mean_squared_error(gt, pred)
+        mae = mean_absolute_error(gt, pred)
+        rmse = math.sqrt(mse)
+        print(f"MSE: {mse:.4f}")
+        print(f"MAE: {mae:.4f}")
+        print(f"RMSE: {rmse:.4f}")
+
+        # Compute ROC curve and ROC area
+        fpr, tpr, _ = roc_curve(gt, test_energy)
+        roc_auc = auc(fpr, tpr)
+
+        # Plot ROC curve
+        fig_roc = go.Figure()
+        fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.4f})'))
+        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random', line=dict(dash='dash')))
+        fig_roc.update_layout(
+            title='Receiver Operating Characteristic (ROC)',
+            xaxis_title='False Positive Rate',
+            yaxis_title='True Positive Rate',
+            showlegend=True
+        )
+        fig_roc.show()
+        fig_roc.write_html("roc_curve.html")
+
+        # Compute Precision-Recall curve and area
+        precision_curve, recall_curve, _ = precision_recall_curve(gt, test_energy)
+        pr_auc = auc(recall_curve, precision_curve)
+
+        # Plot Precision-Recall curve
+        fig_pr = go.Figure()
+        fig_pr.add_trace(go.Scatter(x=recall_curve, y=precision_curve, mode='lines', name=f'PR curve (AUC = {pr_auc:.4f})'))
+        fig_pr.update_layout(
+            title='Precision-Recall Curve',
+            xaxis_title='Recall',
+            yaxis_title='Precision',
+            showlegend=True
+        )
+        fig_pr.show()
+        fig_pr.write_html("pr_curve.html")
 
         accuracy = accuracy_score(gt, pred)
         precision, recall, f_score, support = precision_recall_fscore_support(gt, pred,
