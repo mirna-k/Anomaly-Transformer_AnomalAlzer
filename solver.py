@@ -9,7 +9,7 @@ import time
 from utils.utils import *
 from model.AnomalyTransformer import AnomalyTransformer
 from data_factory.data_loader import get_loader_segment
-from sklearn.metrics import auc, mean_absolute_error, mean_squared_error, precision_recall_curve, precision_recall_fscore_support, accuracy_score, roc_curve
+from sklearn.metrics import classification_report, auc, mean_absolute_error, mean_squared_error, precision_recall_curve, precision_recall_fscore_support, accuracy_score, roc_curve
 
 
 def my_kl_loss(p, q):
@@ -34,8 +34,8 @@ class EarlyStopping:
         self.best_score = None
         self.best_score2 = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
-        self.val_loss2_min = np.Inf
+        self.val_loss_min = np.inf
+        self.val_loss2_min = np.inf
         self.delta = delta
         self.dataset = dataset_name
 
@@ -92,8 +92,13 @@ class Solver(object):
 
 
     def build_model(self):
-        self.model = AnomalyTransformer(win_size=self.win_size, enc_in=self.input_c, c_out=self.output_c, e_layers=3)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        if self.pretrained_model is not None:
+            self.model.load_state_dict(
+                torch.load(
+                    self.pretrained_model, map_location=self.device))
+        else:
+            self.model = AnomalyTransformer(win_size=self.win_size, enc_in=self.input_c, c_out=self.output_c, e_layers=3)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
         if torch.cuda.is_available():
             self.model.to(torch.device('cuda'))
@@ -130,13 +135,14 @@ class Solver(object):
 
     def phase_train(self, num_phases=3):
         for phase in range(1, num_phases + 1):
-            print(f"\n====== PHASE {phase} TRAINING ======\n")
+            print(f"\n=============== PHASE {phase} TRAINING ===============\n")
             self.train_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
                                                 mode='train', dataset='ESAPhase', phase=phase)
             self.vali_loader = get_loader_segment(self.data_path, batch_size=self.batch_size, win_size=self.win_size,
                                                 mode='val', dataset='ESAPhase', phase=phase)
             self.lr = self.og_lr * 0.9
             self.train()
+            torch.save(self.model.state_dict(), os.path.join(self.model_save_path, f'ESAPhase_checkpoint(phase{phase}).pth'))
 
     
     def train(self):
@@ -220,7 +226,7 @@ class Solver(object):
     def test(self):
         self.model.load_state_dict(
             torch.load(
-                self.pretrained_model, map_location={'cuda': 'cuda:1'}))
+                self.pretrained_model, map_location=self.device))
         self.model.eval()
         temperature = 50
 
@@ -384,7 +390,7 @@ class Solver(object):
         print("pred: ", pred.shape)
         print("gt:   ", gt.shape)
 
-        num_channels = 5
+        num_channels = 1
         flat_data = torch.cat([x.view(-1) for x in test_data])  # shape: [total_length]
         total_length = flat_data.shape[0]
         time_steps = total_length // num_channels
@@ -441,6 +447,8 @@ class Solver(object):
         accuracy = accuracy_score(gt, pred)
         precision, recall, f_score, support = precision_recall_fscore_support(gt, pred,
                                                                               average='binary', zero_division=0)
+
+        print(classification_report(gt, pred, digits=4))
         print(
             "Accuracy : {:0.4f}, Precision : {:0.4f}, Recall : {:0.4f}, F-score : {:0.4f} ".format(
                 accuracy, precision,
